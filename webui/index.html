@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Platform</title>
+  <!-- Override API base via: <meta name="api-base" content="http://host:port"> -->
+  <meta name="api-base" content="">
+  <link rel="stylesheet" href="style.css">
+  <!-- Markdown renderer + sanitizer, CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+</head>
+<body>
+  <!-- Top bar (always visible after login) -->
+  <header id="topbar" class="hidden">
+    <div class="topbar-inner">
+      <a class="brand" href="#/home">Agent Platform</a>
+      <nav>
+        <a href="#/home" data-nav="home">主页</a>
+        <a href="#/tasks" data-nav="tasks">任务历史</a>
+      </nav>
+      <div class="user">
+        <span id="user-name"></span>
+        <button id="logout-btn" class="btn-text">退出</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content area, views injected here -->
+  <main id="view"></main>
+
+  <!-- Toast container -->
+  <div id="toasts"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
