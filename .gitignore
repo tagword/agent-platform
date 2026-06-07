@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+
+# Test artifacts
+/tmp/agent-platform-test/
+/tmp/agent-platform-smoke*
+
+# Local config overrides
+.env
+.env.local
