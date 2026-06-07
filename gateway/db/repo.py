@@ -190,8 +190,9 @@ def create_upload(
     parsed_json: Optional[str],
     parse_status: str = "ok",
     parse_error: Optional[str] = None,
+    upload_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    uid = new_upload_id()
+    uid = upload_id or new_upload_id()
     now = int(time.time())
     with transaction() as conn:
         conn.execute(
@@ -204,7 +205,8 @@ def create_upload(
         )
     return {
         "id": uid, "user_id": user_id, "filename": filename,
-        "size_bytes": size_bytes, "parse_status": parse_status,
+        "content_type": content_type, "size_bytes": size_bytes,
+        "parse_status": parse_status, "parse_error": parse_error,
         "created_at": now,
     }
 
@@ -212,7 +214,7 @@ def create_upload(
 def list_uploads(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT * FROM uploads WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM uploads WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
         (user_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -289,7 +291,7 @@ def get_user_task(user_id: str, task_id: str) -> Optional[dict[str, Any]]:
 def list_user_tasks(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT * FROM user_tasks WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM user_tasks WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
         (user_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]

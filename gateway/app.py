@@ -51,7 +51,9 @@ def create_app() -> FastAPI:
 
     # Mount routers
     from gateway.routes import auth as auth_routes
+    from gateway.routes import uploads as uploads_routes
     app.include_router(auth_routes.router)
+    app.include_router(uploads_routes.router)
 
     @app.on_event("startup")
     async def _init_db() -> None:

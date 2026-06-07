@@ -16,13 +16,18 @@ from gateway.db import repo
 
 
 @pytest.fixture(autouse=True)
-def _reset_db():
-    """Wipe DB before each test for full isolation."""
+def _reset_state():
+    """Wipe DB and uploads dir before each test for full isolation."""
+    import shutil
     repo.reset_db_for_tests()
+    if config.UPLOADS_DIR.exists():
+        shutil.rmtree(config.UPLOADS_DIR, ignore_errors=True)
     config.ensure_dirs()
     repo.init_db()
     yield
     repo.reset_db_for_tests()
+    if config.UPLOADS_DIR.exists():
+        shutil.rmtree(config.UPLOADS_DIR, ignore_errors=True)
 
 
 @pytest.fixture
