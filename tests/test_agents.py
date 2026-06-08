@@ -8,7 +8,7 @@ def _auth(token: str) -> dict:
 
 
 def test_list_agents_default_seeded(client):
-    """The default seed template 'data-analysis-report' should be listed."""
+    """The default seed templates should be listed."""
     r = client.post("/api/auth/register", json={
         "email": "alice@example.com", "password": "secret123", "name": "Alice",
     })
@@ -19,6 +19,8 @@ def test_list_agents_default_seeded(client):
     body = r.json()
     ids = [a["id"] for a in body["agents"]]
     assert "data-analysis-report" in ids
+    assert "code-review" in ids
+    assert "doc-summary" in ids
     agent = next(a for a in body["agents"] if a["id"] == "data-analysis-report")
     assert agent["name"] == "数据分析报告"
     assert agent["version"] == "v1"

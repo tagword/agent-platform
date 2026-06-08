@@ -1,12 +1,21 @@
-"""Task routes: POST /api/tasks/run, GET /api/tasks, GET /api/tasks/{id}.
+"""Task routes:
+- POST /api/tasks      (async: queue + 202)
+- POST /api/tasks/run  (sync:  block until done, 200)
+- GET  /api/tasks      (list)
+- GET  /api/tasks/{id} (detail)
 
-Flow for run:
-1. Validate upload_id belongs to user
+Both POST endpoints share the same validation, upload, and agent-template
+loading. The difference is execution: async enqueues a background worker,
+sync calls TaskAgent inline.
+
+Flow for async:
+1. Validate upload_id + agent_id
 2. Create user_task row (status=queued)
-3. Update to status=running
-4. Call TaskAgent /tasks/run
-5. Update row with status/reply/error/duration
-6. Return task record to client
+3. Enqueue (item with task_id)
+4. Return task_id immediately with 202
+
+The background worker (gateway.async_runner) picks the item off the queue
+and calls TaskAgent, then updates the row.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from gateway.async_runner import TaskQueue, get_queue
 from gateway.auth.deps import get_current_user
 from gateway.db import repo
 from gateway.taskagent_client import TaskAgentError, run_task
@@ -55,6 +65,55 @@ def _resolve_parsed_data(upload: dict) -> dict:
 
 
 # --- Routes -----------------------------------------------------------------
+
+@router.post("", status_code=202)
+async def enqueue_task(
+    body: RunTaskRequest,
+    user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Enqueue a task and return immediately. The client polls
+    GET /api/tasks/{task_id} until status is one of: ok, failed, timeout."""
+    # 1. Validate agent
+    agent = repo.get_agent_template(body.agent_id)
+    if not agent or not agent.get("enabled"):
+        raise HTTPException(status_code=404, detail=f"Agent not found or disabled: {body.agent_id}")
+
+    # 2. Validate upload ownership + parseability
+    upload = repo.get_upload(user_id=user["id"], upload_id=body.upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail=f"Upload not found: {body.upload_id}")
+    if upload.get("parse_status") != "ok":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload is not parseable: {upload.get('parse_error') or 'unknown error'}",
+        )
+
+    # 3. Create user_task row (status=queued)
+    task_id = repo.create_user_task(
+        user_id=user["id"],
+        agent_template_id=body.agent_id,
+        agent_version=agent["version"],
+        upload_id=body.upload_id,
+    )
+
+    # 4. Enqueue
+    from gateway.async_runner import _QueueItem  # internal but small surface
+    q = get_queue()
+    await q.enqueue(_QueueItem(
+        user_task_id=task_id,
+        user_id=user["id"],
+        upload_id=body.upload_id,
+        agent_id=body.agent_id,
+        user_instructions=body.user_instructions,
+        dataset_name=body.dataset_name,
+    ))
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "queue_depth": q.qsize(),
+    }
+
 
 @router.post("/run")
 async def run_user_task(

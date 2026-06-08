@@ -33,6 +33,12 @@ def _reset_state():
 @pytest.fixture
 def client() -> TestClient:
     from gateway.app import create_app
+    from gateway.async_runner import reset_queue
+    # Ensure no stale queue from a prior test's event loop
+    reset_queue()
     app = create_app()
     with TestClient(app) as c:
+        # Ensure the app's lifespan started a fresh queue bound to this loop
+        reset_queue()
         yield c
+    reset_queue()

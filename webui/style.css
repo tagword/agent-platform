@@ -377,13 +377,45 @@ main {
 
 .hidden { display: none !important; }
 
+/* Bottom tab bar (hidden on desktop) */
+#bottomnav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 6px 0;
+  z-index: 10;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+}
+#bottomnav a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  padding: 6px 0;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 11px;
+  transition: color 0.15s;
+}
+#bottomnav a:hover, #bottomnav a.active { color: var(--primary); }
+.bnav-icon { font-size: 22px; line-height: 1; }
+.bnav-label { font-size: 10px; }
+
 /* Mobile */
 @media (max-width: 640px) {
   .topbar-inner { flex-wrap: wrap; gap: 12px; padding: 10px 16px; }
-  nav { order: 3; width: 100%; }
-  main { padding: 0 16px; margin: 16px auto; }
+  #topnav { display: none; }   /* hide horizontal nav on mobile */
+  .user { font-size: 13px; }
+  .user #user-name { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+  main { padding: 0 16px 80px; margin: 16px auto; }  /* leave space for bottom nav */
   .card { padding: 16px; }
   .report-md { padding: 16px; }
   .auth-container { margin: 32px auto; }
   .task-row { flex-direction: column; align-items: flex-start; }
+  #bottomnav { display: flex; }
 }

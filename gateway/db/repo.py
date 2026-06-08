@@ -358,6 +358,26 @@ def _seed_default_templates(conn: sqlite3.Connection) -> None:
             "input_schema_json": None,
             "enabled": True,
         },
+        {
+            "id": "code-review",
+            "name": "代码审查",
+            "description": "对上传的代码文件进行结构化审查（正确性/可读性/性能/安全/可维护性），输出按严重度分级的问题清单和改进建议。",
+            "bundle": "code-review",
+            "job_id": "code-review",
+            "version": "v1",
+            "input_schema_json": None,
+            "enabled": True,
+        },
+        {
+            "id": "doc-summary",
+            "name": "文档摘要",
+            "description": "对长文档（技术文档/报告/文章/会议纪要）生成结构化摘要，含核心要点、关键数据、术语表、行动建议。",
+            "bundle": "doc-summary",
+            "job_id": "doc-summary",
+            "version": "v1",
+            "input_schema_json": None,
+            "enabled": True,
+        },
     ]
     now = int(time.time())
     for t in defaults:

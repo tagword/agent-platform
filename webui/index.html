@@ -16,7 +16,7 @@
   <header id="topbar" class="hidden">
     <div class="topbar-inner">
       <a class="brand" href="#/home">Agent Platform</a>
-      <nav>
+      <nav id="topnav">
         <a href="#/home" data-nav="home">主页</a>
         <a href="#/tasks" data-nav="tasks">任务历史</a>
       </nav>
@@ -29,6 +29,22 @@
 
   <!-- Main content area, views injected here -->
   <main id="view"></main>
+
+  <!-- Bottom tab bar (mobile only) -->
+  <nav id="bottomnav" class="hidden">
+    <a href="#/home" data-nav="home">
+      <span class="bnav-icon">🏠</span>
+      <span class="bnav-label">主页</span>
+    </a>
+    <a href="#/tasks" data-nav="tasks">
+      <span class="bnav-icon">📋</span>
+      <span class="bnav-label">任务</span>
+    </a>
+    <a href="#" id="bnav-logout">
+      <span class="bnav-icon">⎋</span>
+      <span class="bnav-label">退出</span>
+    </a>
+  </nav>
 
   <!-- Toast container -->
   <div id="toasts"></div>

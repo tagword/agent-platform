@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,10 +31,25 @@ def create_app() -> FastAPI:
     config.ensure_dirs()
     config.get_or_create_jwt_secret()
 
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Startup
+        from gateway.async_runner import get_queue
+        from gateway.db import repo
+        repo.init_db()
+        logging.getLogger(__name__).info("DB initialized at %s", config.db_path_str())
+        queue = get_queue()
+        await queue.start()
+        try:
+            yield
+        finally:
+            await queue.stop()
+
     app = FastAPI(
         title="Agent Platform",
         version="0.1.0",
         description="User-facing gateway on top of TaskAgent.",
+        lifespan=lifespan,
     )
 
     # CORS — open in dev; tighten in production via env
@@ -58,13 +74,6 @@ def create_app() -> FastAPI:
     app.include_router(uploads_routes.router)
     app.include_router(agents_routes.router)
     app.include_router(tasks_routes.router)
-
-    @app.on_event("startup")
-    async def _init_db() -> None:
-        # Lazy import: db module may log on import
-        from gateway.db import repo
-        repo.init_db()
-        logging.getLogger(__name__).info("DB initialized at %s", config.db_path_str())
 
     return app
 

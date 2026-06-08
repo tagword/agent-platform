@@ -22,3 +22,8 @@ dist/
 # Local config overrides
 .env
 .env.local
+
+# Deploy artifacts
+deploy/.env
+deploy/taskagent-data/
+deploy/gateway-data/

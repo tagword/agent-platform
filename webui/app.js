@@ -129,6 +129,7 @@
   function render() {
     const hash = location.hash || (isAuthed() ? '#/home' : '#/login');
     const topbar = document.getElementById('topbar');
+    const bottomnav = document.getElementById('bottomnav');
     const view = document.getElementById('view');
     if (!isAuthed() && hash !== '#/login') {
       navigate('#/login');
@@ -136,15 +137,16 @@
     }
     if (isAuthed()) {
       topbar.classList.remove('hidden');
+      bottomnav.classList.remove('hidden');
       document.getElementById('user-name').textContent = state.user?.name || state.user?.email || '';
-      // Active nav link
-      document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+      // Active nav link (both top and bottom)
+      document.querySelectorAll('#topnav a, #bottomnav a[data-nav]').forEach(a => a.classList.remove('active'));
       const isTaskView = hash.startsWith('#/tasks');
       const activeNav = isTaskView ? 'tasks' : 'home';
-      const navEl = document.querySelector(`nav a[data-nav="${activeNav}"]`);
-      if (navEl) navEl.classList.add('active');
+      document.querySelectorAll(`#topnav a[data-nav="${activeNav}"], #bottomnav a[data-nav="${activeNav}"]`).forEach(a => a.classList.add('active'));
     } else {
       topbar.classList.add('hidden');
+      bottomnav.classList.add('hidden');
     }
     for (const r of routes) {
       const m = hash.match(r.pattern);
@@ -255,6 +257,11 @@
           <textarea id="user-instructions" placeholder="比如：重点关注付费渠道的留存率异常"></textarea>
           <div class="field-hint">将作为补充上下文传给 Agent</div>
         </div>
+        <div class="field" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="async-mode" style="width:auto;">
+          <label for="async-mode" style="margin:0;cursor:pointer;">异步模式（提交后不阻塞）</label>
+          <div class="field-hint" style="margin-left:8px;">适合长任务；启用后会自动跳到任务详情并轮询</div>
+        </div>
         <button id="run-btn" class="btn-primary" disabled>选择文件后运行</button>
         <div id="run-error" class="error-msg hidden" style="margin-top:12px;"></div>
       </div>
@@ -341,12 +348,14 @@
     // Run button
     const runBtn = root.querySelector('#run-btn');
     const errEl = root.querySelector('#run-error');
+    const asyncCheckbox = root.querySelector('#async-mode');
     runBtn.addEventListener('click', async () => {
       if (!state.selectedAgent || !state.pendingFile) return;
       errEl.classList.add('hidden');
       runBtn.disabled = true;
       const originalText = runBtn.textContent;
-      runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 上传并运行...';
+      const isAsync = asyncCheckbox.checked;
+      runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 上传中...';
       try {
         // 1. Upload
         const fd = new FormData();
@@ -355,7 +364,7 @@
         if (upload.parse_status !== 'ok') {
           throw new Error(upload.parse_error || '文件解析失败');
         }
-        // 2. Run task
+        // 2. Run task (sync or async)
         const runBody = {
           upload_id: upload.id,
           agent_id: state.selectedAgent.id,
@@ -363,13 +372,21 @@
         };
         const dsName = root.querySelector('#dataset-name').value.trim();
         if (dsName) runBody.dataset_name = dsName;
-        const task = await api('/api/tasks/run', { method: 'POST', body: runBody });
-        if (task.status === 'ok') {
-          toast('报告生成完成', 'success');
-        } else if (task.status === 'failed') {
-          toast(`任务失败: ${task.error || '未知错误'}`, 'error');
+        if (isAsync) {
+          runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 排队中...';
+          const enq = await api('/api/tasks', { method: 'POST', body: runBody });
+          toast(`任务已加入队列（队列深度 ${enq.queue_depth}）`, 'success');
+          navigate(`#/tasks/${enq.task_id}?poll=1`);
+        } else {
+          runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 同步运行中...';
+          const task = await api('/api/tasks/run', { method: 'POST', body: runBody });
+          if (task.status === 'ok') {
+            toast('报告生成完成', 'success');
+          } else if (task.status === 'failed') {
+            toast(`任务失败: ${task.error || '未知错误'}`, 'error');
+          }
+          navigate(`#/tasks/${task.task_id}`);
         }
-        navigate(`#/tasks/${task.task_id}`);
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
@@ -411,10 +428,38 @@
 
   async function viewTaskDetail(root, match) {
     const taskId = match[1];
+    // ?poll=1 in the URL enables auto-polling until task completes.
+    // Note: with hash routing, query string lives in the hash, not location.search.
+    const hashQuery = (location.hash.split('?')[1] || '');
+    const shouldPoll = hashQuery.includes('poll=1');
     root.innerHTML = `<div id="task-detail">${stateLoading('加载报告...')}</div>`;
-    try {
-      const task = await api(`/api/tasks/${taskId}`);
+
+    let pollTimer = null;
+    let pollCount = 0;
+    const MAX_POLLS = 600; // 10 minutes at 1s
+
+    async function fetchAndRender() {
+      try {
+        const task = await api(`/api/tasks/${taskId}`);
+        renderTask(task);
+        const isFinal = ['ok', 'failed', 'timeout', 'cancelled'].includes(task.status);
+        if (shouldPoll && !isFinal && pollCount < MAX_POLLS) {
+          pollCount++;
+          // Adaptive: 0.5s while queued, 1s while running
+          const interval = task.status === 'queued' ? 500 : 1000;
+          pollTimer = setTimeout(fetchAndRender, interval);
+        } else if (isFinal) {
+          if (task.status === 'ok') toast('报告生成完成', 'success');
+          else if (task.status === 'failed') toast(`任务失败: ${task.error || '未知错误'}`, 'error');
+        }
+      } catch (err) {
+        root.querySelector('#task-detail').innerHTML = stateError('加载任务失败', err.message);
+      }
+    }
+
+    function renderTask(task) {
       const det = root.querySelector('#task-detail');
+      const isFinal = ['ok', 'failed', 'timeout', 'cancelled'].includes(task.status);
       det.innerHTML = `
         <div class="card">
           <div class="report-header">
@@ -428,6 +473,7 @@
                 <span class="task-row-id">${esc(task.id)}</span>
                 · ${new Date(task.created_at * 1000).toLocaleString('zh-CN')}
                 ${task.duration_ms ? ` · 耗时 ${(task.duration_ms / 1000).toFixed(1)}s` : ''}
+                ${shouldPoll && !isFinal ? ` · <span class="poll-indicator">轮询中 (#${pollCount})</span>` : ''}
               </div>
             </div>
             <div>
@@ -436,10 +482,17 @@
             </div>
           </div>
           ${task.error ? `<div class="error-msg" style="margin-bottom:16px;">${esc(task.error)}</div>` : ''}
-          ${task.report ? `<div class="report-md" id="report-md">${renderMarkdown(task.report)}</div>` : ''}
+          ${task.report
+            ? `<div class="report-md" id="report-md">${renderMarkdown(task.report)}</div>`
+            : (shouldPoll && !isFinal
+                ? `<div class="state" id="poll-progress">${stateLoading(task.status === 'queued' ? '等待执行...' : 'Agent 正在生成报告...')}</div>`
+                : '<div class="state">⏳ 暂无报告</div>')}
         </div>
       `;
-      root.querySelector('#back-btn').addEventListener('click', () => navigate('#/tasks'));
+      root.querySelector('#back-btn').addEventListener('click', () => {
+        if (pollTimer) clearTimeout(pollTimer);
+        navigate('#/tasks');
+      });
       const dlBtn = root.querySelector('#download-btn');
       if (!dlBtn.disabled) {
         dlBtn.addEventListener('click', () => {
@@ -454,16 +507,27 @@
           URL.revokeObjectURL(url);
         });
       }
-    } catch (err) {
-      root.querySelector('#task-detail').innerHTML = stateError('加载任务失败', err.message);
     }
+
+    // Stop polling when user navigates away
+    window.addEventListener('hashchange', function stop() {
+      if (pollTimer) clearTimeout(pollTimer);
+      window.removeEventListener('hashchange', stop);
+    }, { once: true });
+
+    await fetchAndRender();
   }
 
   // ---- Logout ----
-  document.getElementById('logout-btn').addEventListener('click', () => {
+  function logout() {
     clearSession();
     toast('已退出', 'success');
     navigate('#/login');
+  }
+  document.getElementById('logout-btn').addEventListener('click', logout);
+  document.getElementById('bnav-logout').addEventListener('click', (e) => {
+    e.preventDefault();
+    logout();
   });
 
   // ---- Boot ----
