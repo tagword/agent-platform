@@ -91,6 +91,37 @@ CREATE TABLE IF NOT EXISTS user_agents (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_user_agents_user ON user_agents(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS teams (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT NOT NULL,
+    name                TEXT NOT NULL,
+    description         TEXT DEFAULT '',
+    workflow_mode       TEXT NOT NULL DEFAULT 'sequential',
+    members_json        TEXT DEFAULT '[]',
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_teams_user ON teams(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    id                  TEXT PRIMARY KEY,
+    team_id             TEXT NOT NULL,
+    user_id             TEXT NOT NULL,
+    prompt              TEXT NOT NULL,
+    workflow_mode       TEXT NOT NULL DEFAULT 'sequential',
+    status              TEXT NOT NULL DEFAULT 'queued',
+    steps_json          TEXT DEFAULT '[]',
+    result              TEXT,
+    error               TEXT,
+    created_at          INTEGER NOT NULL,
+    completed_at        INTEGER,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_wr_team ON workflow_runs(team_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wr_user ON workflow_runs(user_id, created_at DESC);
 """
 
 _lock = threading.Lock()
@@ -169,6 +200,14 @@ def new_user_task_id() -> str:
 
 def new_agent_id() -> str:
     return f"ag_{uuid.uuid4().hex[:16]}"
+
+
+def new_team_id() -> str:
+    return f"tm_{uuid.uuid4().hex[:16]}"
+
+
+def new_workflow_run_id() -> str:
+    return f"wrk_{uuid.uuid4().hex[:16]}"
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +456,185 @@ def delete_user_agent(user_id: str, agent_id: str) -> bool:
             (agent_id, user_id),
         )
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Teams
+# ---------------------------------------------------------------------------
+def create_team(
+    user_id: str,
+    name: str,
+    description: str = "",
+    workflow_mode: str = "sequential",
+    members: Optional[list[dict]] = None,
+) -> dict[str, Any]:
+    tid = new_team_id()
+    now = int(time.time())
+    members_str = json.dumps(members or [])
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO teams
+            (id, user_id, name, description, workflow_mode, members_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tid, user_id, name.strip(), description.strip(), workflow_mode, members_str, now, now),
+        )
+    return {
+        "id": tid,
+        "user_id": user_id,
+        "name": name.strip(),
+        "description": description.strip(),
+        "workflow_mode": workflow_mode,
+        "members": members or [],
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def list_teams(user_id: str) -> list[dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM teams WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+        (user_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["members"] = json.loads(d.get("members_json") or "[]")
+        d.pop("members_json", None)
+        out.append(d)
+    return out
+
+
+def get_team(user_id: str, team_id: str) -> Optional[dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM teams WHERE id = ? AND user_id = ?", (team_id, user_id)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["members"] = json.loads(d.get("members_json") or "[]")
+    d.pop("members_json", None)
+    return d
+
+
+def update_team(
+    user_id: str,
+    team_id: str,
+    *,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    workflow_mode: Optional[str] = None,
+    members: Optional[list[dict]] = None,
+) -> Optional[dict[str, Any]]:
+    sets: list[str] = []
+    args: list[Any] = []
+    if name is not None:
+        sets.append("name = ?"); args.append(name.strip())
+    if description is not None:
+        sets.append("description = ?"); args.append(description.strip())
+    if workflow_mode is not None:
+        sets.append("workflow_mode = ?"); args.append(workflow_mode)
+    if members is not None:
+        sets.append("members_json = ?"); args.append(json.dumps(members))
+    if not sets:
+        return get_team(user_id, team_id)
+    now = int(time.time())
+    sets.append("updated_at = ?")
+    args.append(now)
+    args.extend([team_id, user_id])
+    with transaction() as conn:
+        conn.execute(
+            f"UPDATE teams SET {', '.join(sets)} WHERE id = ? AND user_id = ?",
+            args,
+        )
+    return get_team(user_id, team_id)
+
+
+def delete_team(user_id: str, team_id: str) -> bool:
+    with transaction() as conn:
+        cur = conn.execute(
+            "DELETE FROM teams WHERE id = ? AND user_id = ?",
+            (team_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Workflow Runs
+# ---------------------------------------------------------------------------
+def create_workflow_run(
+    team_id: str,
+    user_id: str,
+    prompt: str,
+    workflow_mode: str = "sequential",
+) -> str:
+    run_id = new_workflow_run_id()
+    now = int(time.time())
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO workflow_runs
+            (id, team_id, user_id, prompt, workflow_mode, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'queued', ?)""",
+            (run_id, team_id, user_id, prompt, workflow_mode, now),
+        )
+    return run_id
+
+
+def update_workflow_run(
+    run_id: str,
+    *,
+    status: Optional[str] = None,
+    steps: Optional[list[dict]] = None,
+    result: Optional[str] = None,
+    error: Optional[str] = None,
+    completed: bool = False,
+) -> None:
+    sets: list[str] = []
+    args: list[Any] = []
+    if status is not None:
+        sets.append("status = ?"); args.append(status)
+    if steps is not None:
+        sets.append("steps_json = ?"); args.append(json.dumps(steps))
+    if result is not None:
+        sets.append("result = ?"); args.append(result)
+    if error is not None:
+        sets.append("error = ?"); args.append(error)
+    if completed:
+        sets.append("completed_at = ?"); args.append(int(time.time()))
+    if not sets:
+        return
+    args.append(run_id)
+    with transaction() as conn:
+        conn.execute(f"UPDATE workflow_runs SET {', '.join(sets)} WHERE id = ?", args)
+
+
+def get_workflow_run(run_id: str) -> Optional[dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM workflow_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["steps"] = json.loads(d.get("steps_json") or "[]")
+    d.pop("steps_json", None)
+    return d
+
+
+def list_workflow_runs_by_team(team_id: str, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM workflow_runs WHERE team_id = ? AND user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+        (team_id, user_id, limit),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["steps"] = json.loads(d.get("steps_json") or "[]")
+        d.pop("steps_json", None)
+        out.append(d)
+    return out
 
 
 # ---------------------------------------------------------------------------

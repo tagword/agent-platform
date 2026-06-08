@@ -122,6 +122,10 @@
     { pattern: /^#\/agents$/,                 view: viewUserAgents  },
     { pattern: /^#\/agents\/new$/,            view: viewUserAgentForm },
     { pattern: /^#\/agents\/([\w_]+)\/edit$/, view: viewUserAgentForm },
+    { pattern: /^#\/teams$/,                  view: viewTeams  },
+    { pattern: /^#\/teams\/new$/,             view: viewTeamForm },
+    { pattern: /^#\/teams\/([\w_]+)\/edit$/,  view: viewTeamForm },
+    { pattern: /^#\/teams\/([\w_]+)$/,        view: viewTeamDetail },
     { pattern: /^#\/tasks$/,                  view: viewTasks  },
     { pattern: /^#\/tasks\/([\w_]+)$/,        view: viewTaskDetail },
   ];
@@ -151,6 +155,7 @@
       let activeNav = 'home';
       if (hash.startsWith('#/tasks')) activeNav = 'tasks';
       else if (hash.startsWith('#/agents')) activeNav = 'agents';
+      else if (hash.startsWith('#/teams')) activeNav = 'teams';
       document.querySelectorAll(`#topnav a[data-nav="${activeNav}"], #bottomnav a[data-nav="${activeNav}"]`).forEach(a => a.classList.add('active'));
     } else {
       topbar.classList.add('hidden');
@@ -580,6 +585,361 @@
     } catch (err) {
       root.querySelector('#ua-list').innerHTML = stateError('加载失败', err.message);
     }
+  }
+
+  // ---- View: Teams list ----
+  async function viewTeams(root) {
+    root.innerHTML = `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h2 class="card-title" style="margin:0;">我的团队</h2>
+        <a href="#/teams/new" class="btn btn-primary">+ 新建团队</a>
+      </div>
+      <div class="card-subtitle">组建 Agent 团队，选择工作流模式，协作完成任务</div>
+      <div id="team-list">${stateLoading('加载团队列表...')}</div>
+    </div>`;
+
+    try {
+      const [teamsResp, agentsResp] = await Promise.all([
+        api('/api/teams'),
+        api('/api/user-agents'),
+      ]);
+      const agents = {};
+      for (const a of agentsResp.agents || []) agents[a.id] = a;
+
+      const list = root.querySelector('#team-list');
+      if (!teamsResp.teams.length) {
+        list.innerHTML = stateEmpty('还没有团队', '点「新建团队」创建一个吧');
+        return;
+      }
+      list.innerHTML = teamsResp.teams.map(t => {
+        const modeLabel = t.workflow_mode === 'sequential' ? '顺序流水线' : '管家模式';
+        return `<div class="task-row" style="display:flex;justify-content:space-between;align-items:center;padding:16px;">
+          <div>
+            <div style="font-weight:600;">${esc(t.name)}</div>
+            <div class="task-row-meta">${esc(t.description || '')}</div>
+            <div class="task-row-meta" style="font-size:12px;">
+              <span class="badge badge-ok">${esc(modeLabel)}</span>
+              ${(t.members || []).map(m => esc(agents[m.agent_id]?.name || m.role_name || m.agent_id.slice(0,12))).join(' → ')}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0;">
+            <a href="#/teams/${esc(t.id)}" class="btn">运行</a>
+            <a href="#/teams/${esc(t.id)}/edit" class="btn">编辑</a>
+            <button class="btn btn-danger" data-delete="${esc(t.id)}" data-name="${esc(t.name)}">删除</button>
+          </div>
+        </div>`;
+      }).join('');
+
+      list.querySelectorAll('[data-delete]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm(`确定删除团队「${btn.dataset.name}」？`)) return;
+          btn.disabled = true;
+          try {
+            await api(`/api/teams/${btn.dataset.delete}`, { method: 'DELETE' });
+            toast('已删除', 'success');
+            await viewTeams(root);
+          } catch (err) {
+            toast(`删除失败: ${err.message}`, 'error');
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      root.querySelector('#team-list').innerHTML = stateError('加载失败', err.message);
+    }
+  }
+
+  // ---- View: Team form (create/edit) ----
+  async function viewTeamForm(root, match) {
+    const teamId = match ? match[1] : null;
+    const isEdit = !!teamId;
+    let teamData = null;
+    let agentsList = [];
+
+    root.innerHTML = stateLoading(isEdit ? '加载团队...' : '');
+
+    try {
+      const [agentsResp] = await Promise.all([
+        api('/api/user-agents'),
+        isEdit ? api(`/api/teams/${teamId}`).then(d => { teamData = d; }).catch(() => {}) : Promise.resolve(),
+      ]);
+      agentsList = agentsResp.agents || [];
+    } catch (err) {
+      root.innerHTML = `<div class="card">${stateError('加载失败', err.message)}</div>`;
+      return;
+    }
+
+    function renderForm() {
+      const nameVal = root.querySelector('#tm-name')?.value || (teamData ? teamData.name : '');
+      const descVal = root.querySelector('#tm-desc')?.value || (teamData ? teamData.description : '');
+      const modeVal = root.querySelector('[name="workflow_mode"]:checked')?.value || (teamData ? teamData.workflow_mode : 'sequential');
+      const existingMembers = teamData ? (teamData.members || []) : [];
+      const existingAgentIds = existingMembers.map(m => m.agent_id);
+
+      root.innerHTML = `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h2 class="card-title" style="margin:0;">${isEdit ? '编辑团队' : '新建团队'}</h2>
+          <a href="#/teams" class="btn">← 返回</a>
+        </div>
+
+        <form id="tm-form">
+          <div class="field">
+            <label>团队名称 *</label>
+            <input type="text" id="tm-name" name="name" required maxlength="64"
+              placeholder="如：数据分析团队" value="${esc(nameVal)}">
+          </div>
+          <div class="field">
+            <label>描述</label>
+            <input type="text" id="tm-desc" name="description" maxlength="200"
+              placeholder="团队职责描述" value="${esc(descVal)}">
+          </div>
+          <div class="field">
+            <label>工作流模式</label>
+            <div style="display:flex;gap:16px;margin-top:6px;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="radio" name="workflow_mode" value="sequential" ${modeVal === 'sequential' ? 'checked' : ''}>
+                顺序流水线 <span class="field-hint">A → B → C</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="radio" name="workflow_mode" value="manager" ${modeVal === 'manager' ? 'checked' : ''}>
+                管家模式 <span class="field-hint">PM 拆任务 → 派发 → 汇总</span>
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <label>团队成员 <span class="field-hint">选择 Agent 并设定角色</span></label>
+            <div id="members-area">
+              ${existingMembers.map((m, idx) => memberRow(m.agent_id, m.role_name, idx)).join('')}
+              ${existingMembers.length === 0 ? memberRow('', '', 0) : ''}
+            </div>
+            <button type="button" id="add-member-btn" class="btn" style="margin-top:8px;">+ 添加成员</button>
+            <div id="mode-hint" class="field-hint" style="margin-top:8px;">
+              ${modeVal === 'manager' ? '管家模式：第一个成员为 PM，其余为专家' : '顺序模式：按成员顺序依次执行，上一步输出传给下一步'}
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:20px;">
+            <button type="submit" class="btn-primary">${isEdit ? '保存修改' : '创建团队'}</button>
+            <a href="#/teams" class="btn">取消</a>
+          </div>
+          <div id="form-error" class="error-msg hidden" style="margin-top:12px;"></div>
+        </form>
+      </div>`;
+
+      // Mode hint update
+      root.querySelectorAll('[name="workflow_mode"]').forEach(rb => {
+        rb.addEventListener('change', () => {
+          const hint = root.querySelector('#mode-hint');
+          hint.textContent = rb.value === 'manager' ? '管家模式：第一个成员为 PM，其余为专家' : '顺序模式：按成员顺序依次执行，上一步输出传给下一步';
+        });
+      });
+
+      // Add member
+      root.querySelector('#add-member-btn').addEventListener('click', () => {
+        const area = root.querySelector('#members-area');
+        const count = area.children.length;
+        area.insertAdjacentHTML('beforeend', memberRow('', '', count));
+      });
+
+      // Form submit
+      const form = root.querySelector('#tm-form');
+      const errEl = root.querySelector('#form-error');
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errEl.classList.add('hidden');
+        const fd = new FormData(form);
+        const name = fd.get('name').trim();
+        if (!name) { errEl.textContent = '名称不能为空'; errEl.classList.remove('hidden'); return; }
+
+        const memberRows = root.querySelectorAll('.member-row');
+        const members = [];
+        memberRows.forEach((row, idx) => {
+          const sel = row.querySelector('select');
+          const role = row.querySelector('input[type="text"]');
+          if (sel && sel.value) {
+            members.push({
+              agent_id: sel.value,
+              role_name: (role ? role.value : '') || sel.options[sel.selectedIndex]?.text || '',
+              step_order: idx + 1,
+            });
+          }
+        });
+        if (members.length === 0) { errEl.textContent = '至少添加一个成员'; errEl.classList.remove('hidden'); return; }
+
+        const body = {
+          name: name,
+          description: fd.get('description').trim(),
+          workflow_mode: fd.get('workflow_mode'),
+          members: members,
+        };
+
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+          if (isEdit) {
+            await api(`/api/teams/${teamId}`, { method: 'PUT', body });
+            toast('团队已更新', 'success');
+          } else {
+            await api('/api/teams', { method: 'POST', body });
+            toast('团队已创建', 'success');
+          }
+          navigate('#/teams');
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+          submitBtn.disabled = false;
+        }
+      });
+    }
+
+    function memberRow(agentId, roleName, idx) {
+      return `<div class="member-row" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <select style="flex:2;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);" ${agentsList.length === 0 ? 'disabled' : ''}>
+          <option value="">-- 选择 Agent --</option>
+          ${agentsList.map(a => `<option value="${esc(a.id)}" ${a.id === agentId ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+        </select>
+        <input type="text" placeholder="角色名 (如: 数据分析师)" value="${esc(roleName)}"
+          style="flex:2;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);">
+        <button type="button" class="btn btn-danger" style="padding:6px 10px;" onclick="this.closest('.member-row').remove()">✕</button>
+      </div>`;
+    }
+
+    renderForm();
+  }
+
+  // ---- View: Team detail + run workflow ----
+  async function viewTeamDetail(root, match) {
+    const teamId = match[1];
+    let teamData = null;
+    let agentsMap = {};
+    let pollTimer = null;
+
+    root.innerHTML = stateLoading('加载团队...');
+
+    try {
+      const [teamResp, agentsResp] = await Promise.all([
+        api(`/api/teams/${teamId}`),
+        api('/api/user-agents'),
+      ]);
+      teamData = teamResp;
+      for (const a of agentsResp.agents || []) agentsMap[a.id] = a;
+    } catch (err) {
+      root.innerHTML = `<div class="card">${stateError('加载失败', err.message)}</div>`;
+      return;
+    }
+
+    const modeLabel = teamData.workflow_mode === 'sequential' ? '顺序流水线' : '管家模式';
+    render();
+
+    function render(runResult) {
+      const runSteps = runResult ? (runResult.steps || []) : [];
+      const runStatus = runResult ? runResult.status : null;
+      const isRunning = runStatus === 'running' || runStatus === 'queued';
+
+      root.innerHTML = `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <div>
+            <h2 class="card-title" style="margin:0;">${esc(teamData.name)}</h2>
+            <div class="task-row-meta">
+              <span class="badge badge-ok">${esc(modeLabel)}</span>
+              ${esc(teamData.description || '')}
+            </div>
+          </div>
+          <a href="#/teams" class="btn">← 所有团队</a>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;">
+          <h3 style="margin:0 0 12px;">运行工作流</h3>
+          <div class="field">
+            <label>需求描述</label>
+            <textarea id="wf-prompt" rows="3" placeholder="输入需求描述..."></textarea>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;">
+            <button id="wf-run-btn" class="btn-primary">🚀 运行</button>
+            <span id="run-status" class="field-hint"></span>
+          </div>
+          <div id="run-error" class="error-msg hidden" style="margin-top:12px;"></div>
+        </div>
+
+        ${runSteps.length > 0 ? `<div style="border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+          <h3 style="margin:0 0 12px;">执行结果</h3>
+          <div class="run-status-bar" style="margin-bottom:16px;">
+            <span class="badge badge-${esc(runStatus || 'pending')}">${esc(runStatus || 'pending')}</span>
+            ${runResult && runResult.error ? `<span class="error-msg" style="display:inline-block;margin-left:8px;">${esc(runResult.error)}</span>` : ''}
+          </div>
+          ${runSteps.map((s, i) => `
+            <div class="workflow-step" style="border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div style="font-weight:600;">步骤 ${s.step}: ${esc(s.role_name || '')}</div>
+                <span class="badge badge-${esc(s.status)}">${esc(s.status)}</span>
+              </div>
+              ${s.error ? `<div class="error-msg" style="margin-top:8px;">${esc(s.error)}</div>` : ''}
+              ${s.output ? `<details style="margin-top:8px;">
+                <summary style="cursor:pointer;color:var(--primary);font-size:13px;">查看输出</summary>
+                <div class="report-md" style="margin-top:8px;padding:12px;background:var(--bg);border-radius:var(--radius-sm);font-size:13px;">${renderMarkdown(s.output)}</div>
+              </details>` : ''}
+            </div>
+          `).join('')}
+          ${runResult && runResult.result ? `<div style="margin-top:16px;padding:16px;background:var(--bg);border-radius:var(--radius);">
+            <h4 style="margin:0 0 8px;">最终结果</h4>
+            <div class="report-md">${renderMarkdown(runResult.result)}</div>
+          </div>` : ''}
+        </div>` : ''}
+      </div>`;
+
+      // Run button
+      const runBtn = root.querySelector('#wf-run-btn');
+      const promptEl = root.querySelector('#wf-prompt');
+      const statusEl = root.querySelector('#run-status');
+      const errEl = root.querySelector('#run-error');
+
+      if (isRunning) {
+        runBtn.disabled = true;
+        runBtn.textContent = '⏳ 运行中...';
+      }
+
+      runBtn.addEventListener('click', async () => {
+        const prompt = promptEl.value.trim();
+        if (!prompt) { errEl.textContent = '请输入需求描述'; errEl.classList.remove('hidden'); return; }
+        errEl.classList.add('hidden');
+        runBtn.disabled = true;
+        runBtn.textContent = '⏳ 提交中...';
+        try {
+          const resp = await api(`/api/teams/${teamId}/run`, { method: 'POST', body: { prompt } });
+          toast('工作流已启动', 'success');
+          statusEl.textContent = '运行中...';
+          pollRun(resp.run_id);
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+          runBtn.disabled = false;
+          runBtn.textContent = '🚀 运行';
+        }
+      });
+    }
+
+    async function pollRun(runId) {
+      let count = 0;
+      async function tick() {
+        try {
+          const resp = await api(`/api/teams/runs/${runId}`);
+          render(resp);
+          if (resp.status === 'ok' || resp.status === 'failed') {
+            toast(resp.status === 'ok' ? '工作流完成' : '工作流失败', resp.status === 'ok' ? 'success' : 'error');
+            return;
+          }
+          if (count++ < 120) {
+            pollTimer = setTimeout(tick, 1000);
+          }
+        } catch {
+          pollTimer = setTimeout(tick, 2000);
+        }
+      }
+      tick();
+    }
+
+    window.addEventListener('hashchange', () => {
+      if (pollTimer) clearTimeout(pollTimer);
+    }, { once: true });
   }
 
   // ---- View: User Agent form (create/edit) ----

@@ -72,12 +72,14 @@ def create_app() -> FastAPI:
     from gateway.routes import tasks as tasks_routes
     from gateway.routes import tools as tools_routes
     from gateway.routes import user_agents as user_agents_routes
+    from gateway.routes import teams as teams_routes
     app.include_router(auth_routes.router)
     app.include_router(uploads_routes.router)
     app.include_router(agents_routes.router)
     app.include_router(tasks_routes.router)
     app.include_router(tools_routes.router)
     app.include_router(user_agents_routes.router)
+    app.include_router(teams_routes.router)
 
     return app
 
