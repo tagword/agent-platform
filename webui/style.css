@@ -406,6 +406,49 @@ main {
 .bnav-icon { font-size: 22px; line-height: 1; }
 .bnav-label { font-size: 10px; }
 
+/* ── Tool chips (agent form) ── */
+.tools-grid {
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: var(--bg);
+}
+.tool-category { margin-bottom: 4px; }
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--surface);
+  transition: all 0.15s;
+  user-select: none;
+}
+.tool-chip:hover { border-color: var(--primary); background: var(--primary-light); }
+.tool-chip.checked {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+.tool-chip input { display: none; }
+.tool-name { white-space: nowrap; }
+
+/* ── Danger button ── */
+.btn-danger {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+.btn-danger:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
 /* Mobile */
 @media (max-width: 640px) {
   .topbar-inner { flex-wrap: wrap; gap: 12px; padding: 10px 16px; }

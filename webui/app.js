@@ -119,6 +119,9 @@
   const routes = [
     { pattern: /^#\/login$/,                  view: viewLogin  },
     { pattern: /^#\/home$/,                   view: viewHome   },
+    { pattern: /^#\/agents$/,                 view: viewUserAgents  },
+    { pattern: /^#\/agents\/new$/,            view: viewUserAgentForm },
+    { pattern: /^#\/agents\/([\w_]+)\/edit$/, view: viewUserAgentForm },
     { pattern: /^#\/tasks$/,                  view: viewTasks  },
     { pattern: /^#\/tasks\/([\w_]+)$/,        view: viewTaskDetail },
   ];
@@ -145,8 +148,9 @@
       document.getElementById('user-name').textContent = state.user?.name || state.user?.email || '';
       // Active nav link (both top and bottom)
       document.querySelectorAll('#topnav a, #bottomnav a[data-nav]').forEach(a => a.classList.remove('active'));
-      const isTaskView = hash.startsWith('#/tasks');
-      const activeNav = isTaskView ? 'tasks' : 'home';
+      let activeNav = 'home';
+      if (hash.startsWith('#/tasks')) activeNav = 'tasks';
+      else if (hash.startsWith('#/agents')) activeNav = 'agents';
       document.querySelectorAll(`#topnav a[data-nav="${activeNav}"], #bottomnav a[data-nav="${activeNav}"]`).forEach(a => a.classList.add('active'));
     } else {
       topbar.classList.add('hidden');
@@ -520,6 +524,214 @@
     }, { once: true });
 
     await fetchAndRender();
+  }
+
+  // ---- View: User Agents list ----
+  async function viewUserAgents(root) {
+    root.innerHTML = `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h2 class="card-title" style="margin:0;">我的 Agent</h2>
+        <a href="#/agents/new" class="btn btn-primary">+ 新建 Agent</a>
+      </div>
+      <div class="card-subtitle">自定义 Agent：配置角色人设 + 勾选可用工具</div>
+      <div id="ua-list">${stateLoading('加载 Agent 列表...')}</div>
+    </div>`;
+
+    try {
+      const data = await api('/api/user-agents');
+      const list = root.querySelector('#ua-list');
+      if (!data.agents.length) {
+        list.innerHTML = stateEmpty('还没有自定义 Agent', '点右上角「新建 Agent」创建一个吧');
+        return;
+      }
+      list.innerHTML = data.agents.map(a => `
+        <div class="task-row" style="display:flex;justify-content:space-between;align-items:center;padding:16px;">
+          <div>
+            <div style="font-weight:600;">${esc(a.name)}</div>
+            <div class="task-row-meta">${esc(a.description || '')}</div>
+            <div class="task-row-meta" style="margin-top:4px;font-size:12px;">
+              工具: ${(a.tools || []).slice(0, 6).join(', ')}${(a.tools || []).length > 6 ? '...' : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0;">
+            <a href="#/agents/${esc(a.id)}/edit" class="btn">编辑</a>
+            <button class="btn btn-danger" data-delete="${esc(a.id)}" data-name="${esc(a.name)}">删除</button>
+          </div>
+        </div>
+      `).join('');
+
+      // Delete handlers
+      list.querySelectorAll('[data-delete]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const agentId = btn.dataset.delete;
+          const agentName = btn.dataset.name;
+          if (!confirm(`确定删除 Agent「${agentName}」？`)) return;
+          btn.disabled = true;
+          try {
+            await api(`/api/user-agents/${agentId}`, { method: 'DELETE' });
+            toast('已删除', 'success');
+            await viewUserAgents(root);
+          } catch (err) {
+            toast(`删除失败: ${err.message}`, 'error');
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      root.querySelector('#ua-list').innerHTML = stateError('加载失败', err.message);
+    }
+  }
+
+  // ---- View: User Agent form (create/edit) ----
+  async function viewUserAgentForm(root, match) {
+    const agentId = match ? match[1] : null;
+    const isEdit = !!agentId;
+    let agentData = null;
+    let allTools = [];
+
+    root.innerHTML = stateLoading(isEdit ? '加载 Agent...' : '');
+
+    // Load available tools and optionally existing agent data
+    try {
+      const [toolsResp] = await Promise.all([
+        api('/api/available-tools'),
+        isEdit ? api(`/api/user-agents/${agentId}`).then(d => { agentData = d; }).catch(() => {}) : Promise.resolve(),
+      ]);
+      allTools = toolsResp.tools || [];
+    } catch (err) {
+      root.innerHTML = `<div class="card">${stateError('加载失败', err.message)}</div>`;
+      return;
+    }
+
+    const grouped = {};
+    for (const t of allTools) {
+      const cat = t.category || '其他';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(t);
+    }
+    const categoryOrder = ['通用', '文件操作', '网络', '数据', '开发', '命令行', 'Git', '浏览器', '媒体分析', '创作', '记忆', '通信', 'MCP', '系统', '笔记本', '指令', '其他'];
+
+    const selectedTools = new Set(agentData ? (agentData.tools || []) : []);
+
+    function renderForm() {
+      const promptVal = root.querySelector('#ua-prompt')?.value || (agentData ? agentData.system_prompt : '');
+      const nameVal = root.querySelector('#ua-name')?.value || (agentData ? agentData.name : '');
+      const descVal = root.querySelector('#ua-desc')?.value || (agentData ? agentData.description : '');
+      const modelVal = root.querySelector('#ua-model')?.value || (agentData ? agentData.model : '');
+      // Collect selected tools from checkboxes
+      const checked = root.querySelectorAll('.tool-checkbox:checked');
+      const selected = Array.from(checked).map(cb => cb.value);
+
+      root.innerHTML = `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h2 class="card-title" style="margin:0;">${isEdit ? '编辑 Agent' : '新建 Agent'}</h2>
+          <a href="#/agents" class="btn">← 返回</a>
+        </div>
+
+        <form id="ua-form">
+          <div class="field">
+            <label>名称 *</label>
+            <input type="text" id="ua-name" name="name" required maxlength="64"
+              placeholder="如：数据分析师" value="${esc(nameVal)}">
+          </div>
+
+          <div class="field">
+            <label>描述</label>
+            <input type="text" id="ua-desc" name="description" maxlength="200"
+              placeholder="简短描述这个 Agent 的职责" value="${esc(descVal)}">
+          </div>
+
+          <div class="field">
+            <label>角色人设 (System Prompt)</label>
+            <textarea id="ua-prompt" name="system_prompt" rows="6"
+              placeholder="定义 Agent 的角色、技能、行为边界...">${esc(promptVal)}</textarea>
+            <div class="field-hint">好的 prompt 让 Agent 表现更好。描述它的角色、目标、工作方式。</div>
+          </div>
+
+          <div class="field">
+            <label>可用工具 <span class="field-hint">勾选该 Agent 可使用的工具</span></label>
+            <div class="tools-grid" id="tools-grid">
+              ${categoryOrder.map(cat => {
+                const tools = grouped[cat];
+                if (!tools) return '';
+                return `<div class="tool-category">
+                  <div class="tool-cat-title" style="font-weight:600;margin:12px 0 8px;color:var(--text-muted);font-size:13px;">${esc(cat)}</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                    ${tools.map(t => {
+                      const checked = selected.includes(t.name) ? 'checked' : '';
+                      return `<label class="tool-chip ${checked ? 'checked' : ''}" data-tool="${esc(t.name)}">
+                        <input type="checkbox" class="tool-checkbox" value="${esc(t.name)}" ${checked}
+                          onchange="this.parentElement.classList.toggle('checked', this.checked)">
+                        <span class="tool-name">${esc(t.name)}</span>
+                      </label>`;
+                    }).join('')}
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+            <div class="field-hint" style="margin-top:8px;">
+              <span id="tool-count">${selected.length}</span> 个工具已选择
+            </div>
+          </div>
+
+          <div class="field">
+            <label>模型 <span class="field-hint">留空使用默认</span></label>
+            <input type="text" id="ua-model" name="model" placeholder="如：gpt-4o（留空则用系统默认）" value="${esc(modelVal)}">
+          </div>
+
+          <div style="display:flex;gap:12px;margin-top:20px;">
+            <button type="submit" class="btn-primary">${isEdit ? '保存修改' : '创建 Agent'}</button>
+            <a href="#/agents" class="btn">取消</a>
+          </div>
+          <div id="form-error" class="error-msg hidden" style="margin-top:12px;"></div>
+        </form>
+      </div>`;
+
+      // Tool count sync
+      root.querySelectorAll('.tool-checkbox').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const count = root.querySelectorAll('.tool-checkbox:checked').length;
+          const el = root.querySelector('#tool-count');
+          if (el) el.textContent = count;
+        });
+      });
+
+      // Form submit
+      const form = root.querySelector('#ua-form');
+      const errEl = root.querySelector('#form-error');
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errEl.classList.add('hidden');
+        const fd = new FormData(form);
+        const tools = Array.from(root.querySelectorAll('.tool-checkbox:checked')).map(cb => cb.value);
+        const body = {
+          name: fd.get('name').trim(),
+          description: fd.get('description').trim(),
+          system_prompt: fd.get('system_prompt').trim(),
+          tools: tools,
+          model: fd.get('model').trim(),
+        };
+        if (!body.name) { errEl.textContent = '名称不能为空'; errEl.classList.remove('hidden'); return; }
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+          if (isEdit) {
+            await api(`/api/user-agents/${agentId}`, { method: 'PUT', body });
+            toast('Agent 已更新', 'success');
+          } else {
+            await api('/api/user-agents', { method: 'POST', body });
+            toast('Agent 已创建', 'success');
+          }
+          navigate('#/agents');
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+          submitBtn.disabled = false;
+        }
+      });
+    }
+
+    renderForm();
   }
 
   // ---- Logout ----

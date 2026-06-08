@@ -7,6 +7,7 @@ intentionally small — we will not yet auto-diff schemas).
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -76,6 +77,20 @@ CREATE TABLE IF NOT EXISTS agent_templates (
     enabled             INTEGER NOT NULL DEFAULT 1,
     created_at          INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_agents (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT NOT NULL,
+    name                TEXT NOT NULL,
+    description         TEXT DEFAULT '',
+    system_prompt       TEXT DEFAULT '',
+    tools_json          TEXT DEFAULT '[]',
+    model               TEXT DEFAULT '',
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_agents_user ON user_agents(user_id, created_at DESC);
 """
 
 _lock = threading.Lock()
@@ -150,6 +165,10 @@ def new_upload_id() -> str:
 
 def new_user_task_id() -> str:
     return f"utk_{uuid.uuid4().hex[:16]}"
+
+
+def new_agent_id() -> str:
+    return f"ag_{uuid.uuid4().hex[:16]}"
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +317,110 @@ def list_user_tasks(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Agent Templates
+# User Agents (custom agents created via UI)
+# ---------------------------------------------------------------------------
+def create_user_agent(
+    user_id: str,
+    name: str,
+    description: str = "",
+    system_prompt: str = "",
+    tools: Optional[list[str]] = None,
+    model: str = "",
+) -> dict[str, Any]:
+    aid = new_agent_id()
+    now = int(time.time())
+    tools_str = json.dumps(tools or [])
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO user_agents
+            (id, user_id, name, description, system_prompt, tools_json, model, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (aid, user_id, name.strip(), description.strip(), system_prompt.strip(),
+             tools_str, model.strip(), now, now),
+        )
+    return {
+        "id": aid, "user_id": user_id, "name": name.strip(),
+        "description": description.strip(), "system_prompt": system_prompt.strip(),
+        "tools": tools or [], "model": model.strip(),
+        "created_at": now, "updated_at": now,
+    }
+
+
+def list_user_agents(user_id: str) -> list[dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM user_agents WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+        (user_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["tools"] = json.loads(d.get("tools_json") or "[]")
+        d.pop("tools_json", None)
+        out.append(d)
+    return out
+
+
+def get_user_agent(user_id: str, agent_id: str) -> Optional[dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM user_agents WHERE id = ? AND user_id = ?", (agent_id, user_id)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["tools"] = json.loads(d.get("tools_json") or "[]")
+    d.pop("tools_json", None)
+    return d
+
+
+def update_user_agent(
+    user_id: str,
+    agent_id: str,
+    *,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    tools: Optional[list[str]] = None,
+    model: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    sets: list[str] = []
+    args: list[Any] = []
+    if name is not None:
+        sets.append("name = ?"); args.append(name.strip())
+    if description is not None:
+        sets.append("description = ?"); args.append(description.strip())
+    if system_prompt is not None:
+        sets.append("system_prompt = ?"); args.append(system_prompt.strip())
+    if tools is not None:
+        sets.append("tools_json = ?"); args.append(json.dumps(tools))
+    if model is not None:
+        sets.append("model = ?"); args.append(model.strip())
+    if not sets:
+        return get_user_agent(user_id, agent_id)
+    now = int(time.time())
+    sets.append("updated_at = ?")
+    args.append(now)
+    args.extend([agent_id, user_id])
+    with transaction() as conn:
+        conn.execute(
+            f"UPDATE user_agents SET {', '.join(sets)} WHERE id = ? AND user_id = ?",
+            args,
+        )
+    return get_user_agent(user_id, agent_id)
+
+
+def delete_user_agent(user_id: str, agent_id: str) -> bool:
+    with transaction() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_agents WHERE id = ? AND user_id = ?",
+            (agent_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Agent Templates (built-in)
 # ---------------------------------------------------------------------------
 def upsert_agent_template(
     template_id: str,
