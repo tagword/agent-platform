@@ -1,0 +1,31 @@
+{
+  "jobs": {
+    "data-analysis-report": {
+      "enabled": true,
+      "agent_id": "default",
+      "instruction_bundle": "data-analysis-report@v1",
+      "instruction_mode": "bootstrap",
+      "concurrency": 2,
+      "timeout_sec": 600,
+      "message_template": "{{message}}"
+    },
+    "code-review": {
+      "enabled": true,
+      "agent_id": "default",
+      "instruction_bundle": "code-review@v1",
+      "instruction_mode": "bootstrap",
+      "concurrency": 2,
+      "timeout_sec": 600,
+      "message_template": "{{message}}"
+    },
+    "doc-summary": {
+      "enabled": true,
+      "agent_id": "default",
+      "instruction_bundle": "doc-summary@v1",
+      "instruction_mode": "bootstrap",
+      "concurrency": 2,
+      "timeout_sec": 600,
+      "message_template": "{{message}}"
+    }
+  }
+}

@@ -25,5 +25,7 @@ dist/
 
 # Deploy artifacts
 deploy/.env
+deploy/config/seed.models.json
 deploy/taskagent-data/
 deploy/gateway-data/
+

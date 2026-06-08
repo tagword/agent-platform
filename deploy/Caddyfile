@@ -1,0 +1,38 @@
+# Agent Platform — Caddy reverse proxy
+#
+# Default: HTTP on port 80 (works everywhere, no config needed).
+# For HTTPS: either put this behind an external reverse proxy, or replace
+# `:80` with your domain (e.g. `example.com`) — Caddy will auto-provision
+# Let's Encrypt certificates.
+#
+# See deploy/README.md for HTTPS setup instructions.
+
+:80 {
+    # Security headers
+    header {
+        -Server
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Serve webui static files (SPA: all paths → index.html)
+    root * /webui
+    try_files {path} /index.html
+
+    # API reverse proxy
+    @api {
+        path /api/* /health
+    }
+    reverse_proxy @api {
+        to http://gateway:8780
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+    }
+
+    # Access logs (stdout in docker)
+    log {
+        output stdout
+        format json
+    }
+}

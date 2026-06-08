@@ -1,66 +1,44 @@
-# Agent Platform — single-host docker compose
-#
-# Run from the agent-platform/deploy/ directory:
-#   cp .env.example .env  (then edit .env to set real secrets)
-#   docker compose up -d
+# Agent Platform — Production Compose (single host)
 #
 # Architecture:
-#   taskagent  (internal:8770) — release management + /tasks/run
-#   gateway    (8780)          — auth, uploads, task triggering
+#   Caddy (443/80) → webui (static) + gateway (FastAPI) → taskagent (Starlette)
 #
-# For production, put a reverse proxy (Caddy / Traefik / nginx) in front
-# of the gateway for TLS termination, and serve agent-platform/webui/
-# as static files.
+# Quick start:
+#   cd deploy
+#   cp .env.example .env   # edit secrets
+#   cp config/seed.models.json.example config/seed.models.json   # add LLM key
+#   docker compose up -d
+#   # Open https://your-domain.com  (or http://localhost)
 
 version: "3.9"
 
 x-base: &base
   image: python:3.11-slim
   working_dir: /app
-  volumes:
-    - ../../seed:/app/seed:ro
-    - ../../seed-tools:/app/seed-tools:ro
-    - ../../taskagent:/app/taskagent:ro
   environment: &env
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     PYTHONDONTWRITEBYTECODE: "1"
 
 services:
-  taskagent:
-    <<: *base
-    container_name: ap-taskagent
-    volumes:
-      - ../../seed:/app/seed:ro
-      - ../../seed-tools:/app/seed-tools:ro
-      - ../../taskagent:/app/taskagent:ro
-      - taskagent-data:/root/.taskagent
-      - ./seed-templates:/seed-templates:ro
-    environment:
-      <<: *env
-      TASKAGENT_HOME: /root/.taskagent
-      SEED_PROJECT_ROOT: /root/.taskagent
-      TASKAGENT_SYNC_RUN_ENABLED: "1"
-      TASKAGENT_WEBHOOK_SECRET: ${TASKAGENT_HMAC_SECRET}
-    command:
-      - bash
-      - -c
-      - |
-        pip install -e /app/seed -e /app/seed-tools -e /app/taskagent && \
-        mkdir -p /root/.taskagent/releases && \
-        if [ ! -d /root/.taskagent/releases/data-analysis-report@v1 ]; then \
-          taskagent release-publish /seed-templates/data-analysis-report@v1.md \
-            --name data-analysis-report --version v1; \
-        fi && \
-        exec taskagent serve --host 0.0.0.0 --port 8770
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8770/health')"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+  # =========================================================================
+  # Reverse proxy (Caddy) — static files + API reverse proxy
+  # =========================================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: ap-caddy
     restart: unless-stopped
-    expose:
-      - "8770"
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../webui:/webui:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
 
+  # =========================================================================
+  # Gateway (FastAPI) — auth, uploads, task API
+  # =========================================================================
   gateway:
     <<: *base
     container_name: ap-gateway
@@ -76,23 +54,69 @@ services:
     environment:
       <<: *env
       AGENT_PLATFORM_HOME: /root/.agent-platform
-      AGENT_PLATFORM_JWT_SECRET: ${AGENT_PLATFORM_JWT_SECRET}
+      AGENT_PLATFORM_JWT_SECRET: ${AGENT_PLATFORM_JWT_SECRET:?JWT_SECRET required}
       AGENT_PLATFORM_TASKAGENT_URL: http://taskagent:8770
-      AGENT_PLATFORM_TASKAGENT_HMAC_SECRET: ${TASKAGENT_HMAC_SECRET}
+      AGENT_PLATFORM_TASKAGENT_HMAC_SECRET: ${TASKAGENT_HMAC_SECRET:?HMAC_SECRET required}
+      AGENT_PLATFORM_LOG_LEVEL: ${AGENT_PLATFORM_LOG_LEVEL:-INFO}
+      AGENT_PLATFORM_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
     command:
       - bash
       - -c
       - |
-        pip install -e /app/seed -e /app/seed-tools -e /app/taskagent -e /app/gateway && \
-        exec uvicorn gateway.app:app --host 0.0.0.0 --port 8780
+        pip install -q -e /app/seed -e /app/seed-tools -e /app/taskagent -e /app/gateway && \
+        exec uvicorn gateway.app:app --host 0.0.0.0 --port 8780 --log-level ${AGENT_PLATFORM_LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8780/health')"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 15s
     restart: unless-stopped
-    ports:
-      - "${GATEWAY_PORT:-8780}:8780"
+
+  # =========================================================================
+  # TaskAgent (Starlette) — release management + LLM task execution
+  # =========================================================================
+  taskagent:
+    <<: *base
+    container_name: ap-taskagent
+    volumes:
+      - ../../seed:/app/seed:ro
+      - ../../seed-tools:/app/seed-tools:ro
+      - ../../taskagent:/app/taskagent:ro
+      - taskagent-data:/root/.taskagent
+      # LLM config (must exist before start)
+      - ./config/seed.models.json:/root/.taskagent/config/seed.models.json:ro
+      - ./config/jobs.json:/root/.taskagent/config/jobs.json:ro
+      # Seed templates to publish
+      - ../gateway/seed_templates:/seed-templates:ro
+    environment:
+      <<: *env
+      TASKAGENT_HOME: /root/.taskagent
+      SEED_PROJECT_ROOT: /root/.taskagent
+      TASKAGENT_SYNC_RUN_ENABLED: "1"
+      TASKAGENT_WEBHOOK_SECRET: ${TASKAGENT_HMAC_SECRET:?HMAC_SECRET required}
+      TASKAGENT_PORT: "8770"
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        pip install -q -e /app/seed -e /app/seed-tools -e /app/taskagent
+        # Publish all seed templates (idempotent)
+        for f in /seed-templates/*.md; do
+          name=$$(basename "$$f" | sed 's/@.*//')
+          version=$$(basename "$$f" | sed 's/.*@//;s/\.md//')
+          echo "Publishing $${name}@$${version}..."
+          taskagent release-publish "$$f" --name "$$name" --version "$$version" 2>/dev/null || true
+        done
+        exec taskagent serve --host 0.0.0.0 --port 8770
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8770/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   taskagent-data:

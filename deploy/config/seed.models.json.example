@@ -1,0 +1,11 @@
+[
+  {
+    "id": "default",
+    "name": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-v4-flash",
+    "api_key": "sk-YOUR_DEEPSEEK_API_KEY_HERE",
+    "auth_scheme": "Bearer",
+    "provider": "deepseek"
+  }
+]

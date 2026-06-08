@@ -7,11 +7,15 @@
   // ---- Config (override at deploy via window.AGENT_PLATFORM_API_BASE
   //      or <meta name="api-base" content="..."> in index.html) ----
   function resolveApiBase() {
+    // 1. window override (highest priority)
     const fromGlobal = (window.AGENT_PLATFORM_API_BASE || '').replace(/\/+$/, '');
     if (fromGlobal) return fromGlobal;
+    // 2. <meta name="api-base"> — exists → use its content (even if empty = same origin)
     const meta = document.querySelector('meta[name="api-base"]');
-    const fromMeta = meta ? (meta.getAttribute('content') || '').replace(/\/+$/, '') : '';
-    if (fromMeta) return fromMeta;
+    if (meta) {
+      return (meta.getAttribute('content') || '').replace(/\/+$/, '');
+    }
+    // 3. Fallback: dev mode, assume gateway on :8780
     return `${location.protocol}//${location.hostname}:8780`;
   }
   const API_BASE = resolveApiBase();
