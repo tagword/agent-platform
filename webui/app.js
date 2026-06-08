@@ -243,170 +243,139 @@
   async function viewHome(root) {
     root.innerHTML = `
       <div class="card">
-        <h2 class="card-title">选择 Agent</h2>
-        <div class="card-subtitle">选择一个 Agent 模板来处理你的数据</div>
-        <div id="agents-list">${stateLoading('加载 Agent 列表...')}</div>
-      </div>
-      <div class="card" id="upload-card" style="display:none;">
-        <h3 class="card-title">上传数据</h3>
-        <div class="card-subtitle">支持 CSV、Excel（.xlsx/.xls）、JSON 格式，单文件 ≤ 10MB</div>
-        <div class="upload-zone" id="upload-zone">
-          <div class="upload-icon">📁</div>
-          <div id="upload-prompt">
-            <div>点击或拖拽文件到此处</div>
-            <div class="upload-hint">支持 .csv / .xlsx / .xls / .json</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <h2 class="card-title" style="margin:0;">🏠 团队广场</h2>
+            <div class="card-subtitle">选择一个团队，输入需求，自动完成</div>
           </div>
-          <input type="file" id="file-input" accept=".csv,.xlsx,.xls,.json" style="display:none;">
+          <a href="#/teams/new" class="btn btn-primary">+ 新建团队</a>
         </div>
-      </div>
-      <div class="card" id="run-card" style="display:none;">
-        <h3 class="card-title">运行任务</h3>
-        <div class="field">
-          <label>数据集名称（可选）</label>
-          <input type="text" id="dataset-name" placeholder="留空则使用文件名">
-        </div>
-        <div class="field">
-          <label>补充说明（可选）</label>
-          <textarea id="user-instructions" placeholder="比如：重点关注付费渠道的留存率异常"></textarea>
-          <div class="field-hint">将作为补充上下文传给 Agent</div>
-        </div>
-        <div class="field" style="display:flex;align-items:center;gap:8px;">
-          <input type="checkbox" id="async-mode" style="width:auto;">
-          <label for="async-mode" style="margin:0;cursor:pointer;">异步模式（提交后不阻塞）</label>
-          <div class="field-hint" style="margin-left:8px;">适合长任务；启用后会自动跳到任务详情并轮询</div>
-        </div>
-        <button id="run-btn" class="btn-primary" disabled>选择文件后运行</button>
-        <div id="run-error" class="error-msg hidden" style="margin-top:12px;"></div>
+        <div id="home-content">${stateLoading('加载团队列表...')}</div>
       </div>
     `;
 
-    // Load agents
     try {
-      const data = await api('/api/agents');
-      state.agents = data.agents;
-      const list = root.querySelector('#agents-list');
-      if (!data.agents.length) {
-        list.innerHTML = stateEmpty('暂无可用 Agent', '请联系管理员启用 Agent 模板');
+      const [teamsResp, agentsResp] = await Promise.all([
+        api('/api/teams'),
+        api('/api/user-agents'),
+      ]);
+
+      const agents = {};
+      for (const a of agentsResp.agents || []) agents[a.id] = a;
+
+      const content = root.querySelector('#home-content');
+
+      if (!teamsResp.teams.length) {
+        content.innerHTML = stateEmpty('还没有团队',
+          `去<a href="#/agents/new" style="color:var(--primary);">创建 Agent</a>，然后<a href="#/teams/new" style="color:var(--primary);">组建团队</a>开始协作`);
         return;
       }
-      list.innerHTML = data.agents.map(a => `
-        <div class="agent-card" data-agent-id="${esc(a.id)}">
-          <div class="agent-name">
-            ${esc(a.name)}
-            <span class="agent-version">v${esc(a.version)}</span>
+
+      content.innerHTML = teamsResp.teams.map(t => {
+        const modeLabel = t.workflow_mode === 'sequential' ? '顺序流水线' : '管家模式';
+        const memberNames = (t.members || []).map(m =>{
+          const agent = agents[m.agent_id];
+          return m.role_name || agent?.name || m.agent_id.slice(0, 8);
+        }).join(' → ');
+        return `<div class="team-card" data-team-id="${esc(t.id)}" style="
+          border:1px solid var(--border);border-radius:var(--radius);
+          padding:20px;margin-bottom:12px;cursor:pointer;
+          transition:border-color .2s,box-shadow .2s;
+          display:flex;justify-content:space-between;align-items:center;
+        " onmouseenter="this.style.borderColor='var(--primary)'" onmouseleave="this.style.borderColor=''">
+          <div style="flex:1;">
+            <div style="font-size:16px;font-weight:600;color:var(--text);">${esc(t.name)}</div>
+            <div style="font-size:13px;color:var(--text-muted);margin:4px 0;">${esc(t.description || '')}</div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+              <span class="badge badge-ok" style="font-size:11px;">${esc(modeLabel)}</span>
+              <span style="font-size:12px;color:var(--text-muted);">
+                ${(t.members || []).length} 个成员
+              </span>
+              <span style="font-size:12px;color:var(--text-muted);">${memberNames}</span>
+            </div>
           </div>
-          <div class="agent-desc">${esc(a.description || '')}</div>
-        </div>
-      `).join('');
-      list.querySelectorAll('.agent-card').forEach(card => {
-        card.addEventListener('click', () => {
-          list.querySelectorAll('.agent-card').forEach(c => c.classList.remove('selected'));
-          card.classList.add('selected');
-          state.selectedAgent = data.agents.find(a => a.id === card.dataset.agentId);
-          root.querySelector('#upload-card').style.display = '';
-          root.querySelector('#run-card').style.display = '';
-          updateRunBtn();
+          <div style="display:flex;gap:8px;flex-shrink:0;margin-left:16px;">
+            <button class="btn-primary run-team-btn" style="white-space:nowrap;">🚀 运行</button>
+            <a href="#/teams/${esc(t.id)}/edit" class="btn" style="white-space:nowrap;">编辑</a>
+          </div>
+        </div>`;
+      }).join('');
+
+      // Click card → team detail
+      content.querySelectorAll('.team-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.run-team-btn') || e.target.closest('a')) return;
+          navigate(`#/teams/${card.dataset.teamId}`);
         });
       });
+
+      // Run button → open inline prompt
+      content.querySelectorAll('.run-team-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const teamId = btn.closest('.team-card').dataset.teamId;
+          const team = teamsResp.teams.find(t => t.id === teamId);
+          if (!team) return;
+
+          // Create prompt modal
+          const modal = document.createElement('div');
+          modal.style.cssText = `position:fixed;inset:0;z-index:1000;
+            background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;`;
+          modal.innerHTML = `<div style="
+            background:var(--card-bg,#fff);border-radius:var(--radius,12px);
+            padding:24px;width:90%;max-width:540px;box-shadow:0 8px 32px rgba(0,0,0,0.15);
+          ">
+            <h3 style="margin:0 0 4px;">运行「${esc(team.name)}」</h3>
+            <div class="task-row-meta" style="margin-bottom:16px;">
+              ${team.workflow_mode === 'sequential' ? '顺序流水线' : '管家模式'} ·
+              ${(team.members||[]).length} 个成员
+            </div>
+            <div class="field">
+              <label>需求描述</label>
+              <textarea id="modal-prompt" rows="3" placeholder="输入需求，团队会自动完成..."
+                style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);resize:vertical;"></textarea>
+            </div>
+            <div id="modal-error" class="error-msg hidden" style="margin-bottom:12px;"></div>
+            <div style="display:flex;gap:12px;justify-content:flex-end;">
+              <button id="modal-cancel" class="btn">取消</button>
+              <button id="modal-run" class="btn-primary">🚀 运行</button>
+            </div>
+          </div>`;
+          document.body.appendChild(modal);
+
+          const promptEl = modal.querySelector('#modal-prompt');
+          const errEl = modal.querySelector('#modal-error');
+          const runBtn = modal.querySelector('#modal-run');
+          const cancelBtn = modal.querySelector('#modal-cancel');
+
+          promptEl.focus();
+          cancelBtn.addEventListener('click', () => modal.remove());
+          modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+          runBtn.addEventListener('click', async () => {
+            const prompt = promptEl.value.trim();
+            if (!prompt) { errEl.textContent = '请输入需求'; errEl.classList.remove('hidden'); return; }
+            errEl.classList.add('hidden');
+            runBtn.disabled = true;
+            runBtn.textContent = '⏳ 提交中...';
+            try {
+              const resp = await api(`/api/teams/${teamId}/run`, { method: 'POST', body: { prompt } });
+              toast('工作流已启动', 'success');
+              modal.remove();
+              navigate(`#/teams/${teamId}`);
+            } catch (err) {
+              errEl.textContent = err.message;
+              errEl.classList.remove('hidden');
+              runBtn.disabled = false;
+              runBtn.textContent = '🚀 运行';
+            }
+          });
+        });
+      });
+
     } catch (err) {
-      root.querySelector('#agents-list').innerHTML = stateError('加载 Agent 失败', err.message);
-      return;
+      root.querySelector('#home-content').innerHTML = stateError('加载失败', err.message);
     }
-
-    // Upload zone
-    const zone = root.querySelector('#upload-zone');
-    const fileInput = root.querySelector('#file-input');
-    const promptEl = root.querySelector('#upload-prompt');
-    zone.addEventListener('click', () => fileInput.click());
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-    zone.addEventListener('drop', e => {
-      e.preventDefault();
-      zone.classList.remove('dragover');
-      if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
-    });
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files[0]) handleFile(fileInput.files[0]);
-    });
-
-    function handleFile(file) {
-      const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
-      const allowed = ['.csv', '.xlsx', '.xls', '.json'];
-      if (!allowed.includes(ext)) {
-        toast(`不支持的文件类型: ${ext}`, 'error');
-        return;
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        toast('文件超过 10MB 上限', 'error');
-        return;
-      }
-      state.pendingFile = file;
-      zone.classList.add('has-file');
-      promptEl.innerHTML = `
-        <div class="upload-file">📄 ${esc(file.name)}</div>
-        <div class="upload-hint">${(file.size / 1024).toFixed(1)} KB · 点击重新选择</div>
-      `;
-      updateRunBtn();
-    }
-
-    function updateRunBtn() {
-      const btn = root.querySelector('#run-btn');
-      const canRun = state.selectedAgent && state.pendingFile;
-      btn.disabled = !canRun;
-      btn.textContent = canRun
-        ? `运行 ${state.selectedAgent.name}`
-        : (state.selectedAgent ? '请选择文件' : '请先选择 Agent');
-    }
-
-    // Run button
-    const runBtn = root.querySelector('#run-btn');
-    const errEl = root.querySelector('#run-error');
-    const asyncCheckbox = root.querySelector('#async-mode');
-    runBtn.addEventListener('click', async () => {
-      if (!state.selectedAgent || !state.pendingFile) return;
-      errEl.classList.add('hidden');
-      runBtn.disabled = true;
-      const originalText = runBtn.textContent;
-      const isAsync = asyncCheckbox.checked;
-      runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 上传中...';
-      try {
-        // 1. Upload
-        const fd = new FormData();
-        fd.append('file', state.pendingFile);
-        const upload = await api('/api/uploads', { method: 'POST', body: fd });
-        if (upload.parse_status !== 'ok') {
-          throw new Error(upload.parse_error || '文件解析失败');
-        }
-        // 2. Run task (sync or async)
-        const runBody = {
-          upload_id: upload.id,
-          agent_id: state.selectedAgent.id,
-          user_instructions: root.querySelector('#user-instructions').value.trim(),
-        };
-        const dsName = root.querySelector('#dataset-name').value.trim();
-        if (dsName) runBody.dataset_name = dsName;
-        if (isAsync) {
-          runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 排队中...';
-          const enq = await api('/api/tasks', { method: 'POST', body: runBody });
-          toast(`任务已加入队列（队列深度 ${enq.queue_depth}）`, 'success');
-          navigate(`#/tasks/${enq.task_id}?poll=1`);
-        } else {
-          runBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0 6px 0 0;vertical-align:middle;"></span> 同步运行中...';
-          const task = await api('/api/tasks/run', { method: 'POST', body: runBody });
-          if (task.status === 'ok') {
-            toast('报告生成完成', 'success');
-          } else if (task.status === 'failed') {
-            toast(`任务失败: ${task.error || '未知错误'}`, 'error');
-          }
-          navigate(`#/tasks/${task.task_id}`);
-        }
-      } catch (err) {
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-        runBtn.disabled = false;
-        runBtn.textContent = originalText;
-      }
-    });
   }
 
   async function viewTasks(root) {
@@ -418,7 +387,7 @@
       const data = await api('/api/tasks?limit=50');
       const list = root.querySelector('#tasks-list');
       if (!data.tasks.length) {
-        list.innerHTML = stateEmpty('还没有任务', '去主页选择一个 Agent 跑一次吧');
+        list.innerHTML = stateEmpty('还没有运行记录', '去<a href="#/" style="color:var(--primary);">团队广场</a>选择一个团队跑一次吧');
         return;
       }
       list.innerHTML = data.tasks.map(t => `
