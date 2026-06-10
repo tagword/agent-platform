@@ -305,6 +305,240 @@ Get a single task, including the full Markdown report.
   "created_at": 1780875300,
   "completed_at": 1780875316
 }
+
+---
+
+## 7. Available Tools
+
+### `GET /api/available-tools`
+
+List all tools available in the Seed Tools registry. Used when creating a custom Agent to let users pick which tools the Agent can use.
+
+**Response 200**
+```json
+{
+  "tools": [
+    {"name": "bash_tool", "description": "Execute shell commands"},
+    {"name": "file_read", "description": "Read file contents"},
+    {"name": "file_write", "description": "Write content to file"}
+  ]
+}
+```
+
+---
+
+## 8. User Agents (Custom Agent CRUD)
+
+All endpoints require `Authorization: Bearer <jwt>`.
+
+### `GET /api/user-agents`
+
+List the current user's custom Agents.
+
+**Response 200**
+```json
+{
+  "agents": [
+    {
+      "id": "ag_custom_abc123",
+      "name": "My Code Reviewer",
+      "description": "Reviews Python code",
+      "tools": ["bash_tool", "file_read", "grep_tool"],
+      "persona": "You are a senior Python code reviewer...",
+      "config": {},
+      "created_at": 1780875300
+    }
+  ]
+}
+```
+
+### `POST /api/user-agents`
+
+Create a new custom Agent. Writes `tools.json` and persona for the Agent.
+
+**Request**
+```json
+{
+  "name": "My Code Reviewer",
+  "description": "Reviews Python code",
+  "tools": ["bash_tool", "file_read", "grep_tool"],
+  "persona": "You are a senior Python code reviewer..."
+}
+```
+
+**Response 201**
+```json
+{
+  "id": "ag_custom_abc123",
+  "name": "My Code Reviewer",
+  "created_at": 1780875300
+}
+```
+
+### `GET /api/user-agents/{agent_id}`
+
+Get a single custom Agent.
+
+### `PUT /api/user-agents/{agent_id}`
+
+Update a custom Agent. Same request body as POST. Full replace.
+
+### `DELETE /api/user-agents/{agent_id}`
+
+Delete a custom Agent.
+
+**Response 200**
+```json
+{"ok": true}
+```
+
+---
+
+## 9. Teams (Team + Workflow)
+
+All endpoints require `Authorization: Bearer <jwt>`.
+
+### `GET /api/teams`
+
+List the current user's teams.
+
+**Response 200**
+```json
+{
+  "teams": [
+    {
+      "id": "team_abc123",
+      "name": "Data Pipeline",
+      "description": "Automated data analysis pipeline",
+      "workflow_mode": "sequential",
+      "agent_ids": ["ag_custom_abc123", "ag_custom_def456"],
+      "created_at": 1780875300
+    }
+  ]
+}
+```
+
+### `POST /api/teams`
+
+Create a new team with selected Agents and workflow mode.
+
+**Request**
+```json
+{
+  "name": "Data Pipeline",
+  "description": "Automated data analysis pipeline",
+  "workflow_mode": "sequential",
+  "agent_ids": ["ag_custom_abc123", "ag_custom_def456"]
+}
+```
+
+`workflow_mode` options:
+- `sequential` — Agent A → B → C sequential pipeline
+- `manager` — PM mode: one agent acts as PM, decomposes tasks and dispatches
+
+**Response 201**
+```json
+{
+  "id": "team_abc123",
+  "name": "Data Pipeline",
+  "created_at": 1780875300
+}
+```
+
+### `GET /api/teams/{team_id}`
+
+Get a single team with member details.
+
+### `PUT /api/teams/{team_id}`
+
+Update a team. Full replace of agent_ids and workflow_mode.
+
+### `DELETE /api/teams/{team_id}`
+
+Delete a team and its members.
+
+**Response 200**
+```json
+{"ok": true}
+```
+
+### `POST /api/teams/{team_id}/run`
+
+Run a team workflow. The engine executes based on `workflow_mode`:
+- **sequential**: executes agents in order A→B→C, passing context automatically
+- **manager**: a PM Agent decomposes the task, dispatches to sub-agents, then merges results
+
+**Request**
+```json
+{
+  "input": "Analyze this CSV data and generate a report..."
+}
+```
+
+**Response 202**
+```json
+{
+  "run_id": "wr_abc123",
+  "status": "running"
+}
+```
+
+### `GET /api/teams/{team_id}/runs`
+
+List runs for a team (most recent first).
+
+**Response 200**
+```json
+{
+  "runs": [
+    {
+      "id": "wr_abc123",
+      "status": "completed",
+      "mode": "sequential",
+      "created_at": 1780875300
+    }
+  ]
+}
+```
+
+### `GET /api/teams/runs/{run_id}`
+
+Get a single workflow run with all step details.
+
+**Response 200**
+```json
+{
+  "id": "wr_abc123",
+  "team_id": "team_abc123",
+  "mode": "sequential",
+  "status": "completed",
+  "input_data": "Analyze this CSV...",
+  "result": "# Final Report\n\n...",
+  "error": null,
+  "steps": [
+    {
+      "step_index": 0,
+      "agent_label": "Data Parser",
+      "status": "completed",
+      "input_data": "Analyze this CSV...",
+      "output_data": "Parsed data summary...",
+      "error": null
+    },
+    {
+      "step_index": 1,
+      "agent_label": "Report Writer",
+      "status": "completed",
+      "input_data": "Parsed data summary...",
+      "output_data": "# Final Report\n\n...",
+      "error": null
+    }
+  ],
+  "created_at": 1780875300,
+  "updated_at": 1780875350
+}
+```
+
+**Status values**: `running`, `completed`, `failed`, `cancelled`
 ```
 
 **Errors**

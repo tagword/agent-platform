@@ -3,11 +3,16 @@
 > **多用户 Agent-as-a-Service 网关** — 让不懂 Agent 的业务人员能用浏览器上传数据、拿到 AI 生成的报告。
 
 在 [TaskAgent](../taskagent/)（无头任务调度）之上提供：
+
+### 🧑‍💻 用户功能
 - **用户系统**：JWT 注册/登录，每个用户独立数据
 - **文件上传**：CSV / Excel / JSON，服务端自动解析
 - **Agent 模板库**：可选多种 Skill（数据分析报告 / 代码审查 / 文档摘要）
-- **Web UI**：纯静态单页应用，零构建链
-- **同步 / 异步双模式**：30s 内任务用 sync；长任务用 async + 轮询
+- **任务触发**：同步 / 异步双模式，30s 内任务 sync，长任务 async + 轮询
+- **自定义 Agent**：创建自定义 Agent，勾选可用工具，编写人设 prompt
+- **团队协作**：创建团队，组合多个 Agent，选择工作流模式
+- **工作流引擎**：顺序流水线（A→B→C 自动传上下文）或管家模式（PM 拆→派→合）
+- **Web UI**：纯静态 SPA，零构建链，含 Agent 管理页 + 团队运行看板
 
 ```
 ┌──────────────┐  HTTP   ┌──────────────┐  HTTP   ┌──────────────┐
@@ -78,6 +83,8 @@ export AGENT_PLATFORM_TASKAGENT_HMAC_SECRET=dev-secret
 uvicorn gateway.app:app --host 0.0.0.0 --port 8780 &
 ```
 
+Gateway 支持的全部环境变量见 [Project Dashboard](docs/project-dashboard.md#环境变量)。
+
 ### 4. 打开 WebUI
 
 ```bash
@@ -91,13 +98,13 @@ python -m http.server 8080
 
 | 层 | 包 | 状态 |
 |---|---|---|
-| WebUI（纯静态 SPA）| `webui/` | ✅ 4 视图 + 移动端底部 Tab + Markdown 渲染 |
-| Gateway（用户面 API）| `gateway/` | ✅ FastAPI + JWT + SQLite + 文件解析 |
+| WebUI（纯静态 SPA）| `webui/` | ✅ 含 Agent 管理 + 团队看板 + 移动端 Tab |
+| Gateway（用户面 API）| `gateway/` | ✅ FastAPI + JWT + SQLite + 文件解析 + 工作流引擎 |
 | TaskAgent（任务引擎）| `../taskagent/` | ✅ 已就绪（外部依赖） |
 | Seed（LLM 执行引擎）| `../seed/` | ✅ 已就绪（外部依赖） |
 | Seed Tools（工具集）| `../seed-tools/` | ✅ 已就绪（外部依赖） |
 
-### API 端点
+### API 端点概览
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -114,10 +121,23 @@ python -m http.server 8080
 | `POST` | `/api/tasks/run` | **同步**执行，等结果 |
 | `GET` | `/api/tasks` | 我的任务列表 |
 | `GET` | `/api/tasks/{id}` | 任务详情（含 Markdown 报告）|
+| `GET` | `/api/available-tools` | 列出所有可用工具 |
+| `GET` | `/api/user-agents` | 我的自定义 Agent 列表 |
+| `POST` | `/api/user-agents` | 创建自定义 Agent |
+| `PUT` | `/api/user-agents/{id}` | 更新自定义 Agent |
+| `DELETE` | `/api/user-agents/{id}` | 删除自定义 Agent |
+| `GET` | `/api/teams` | 我的团队列表 |
+| `POST` | `/api/teams` | 创建团队 |
+| `PUT` | `/api/teams/{id}` | 更新团队 |
+| `DELETE` | `/api/teams/{id}` | 删除团队 |
+| `POST` | `/api/teams/{id}/run` | 运行团队（工作流）|
+| `GET` | `/api/teams/{id}/runs` | 团队运行历史 |
+| `GET` | `/api/teams/runs/{run_id}` | 单次运行详情（含步骤）|
 
 完整 API 文档：[docs/API.md](docs/API.md)
 部署文档：[docs/DEPLOY.md](docs/DEPLOY.md)
 Docker Compose：[deploy/docker-compose.yml](deploy/docker-compose.yml)
+项目全景：[docs/project-dashboard.md](docs/project-dashboard.md)
 
 ## 已内置的 Agent 模板
 
@@ -127,13 +147,20 @@ Docker Compose：[deploy/docker-compose.yml](deploy/docker-compose.yml)
 | `code-review` | 代码审查 | 代码文件 | PR 辅助、代码质量评估 |
 | `doc-summary` | 文档摘要 | 长文档 | 快速理解、要点提取 |
 
-新增模板：编辑 `gateway/seed_templates/<id>@<version>.md` + 在 `gateway/db/repo.py` 的 `_seed_default_templates` 注册。
+## 工作流模式
+
+团队支持两种工作流模式：
+
+| 模式 | 说明 |
+|------|------|
+| **顺序流水线** | Agent A → B → C 依次执行，上一步的输出自动作为下一步的输入 |
+| **管家模式** | PM Agent 拆解任务 → 派发给各 Agent → 汇总合并最终结果 |
 
 ## 测试
 
 ```bash
 # 后端 (40 tests, ~17s)
-pytest
+cd agent-platform && pytest
 
 # 端到端浏览器 (需 playwright + 三个服务在跑)
 python3 .scripts/e2e-webui.py
@@ -142,8 +169,8 @@ python3 .scripts/e2e-webui.py
 ## 已知边界（v1 显式不做）
 
 - ❌ 计费 / 订阅 / 限额
-- ❌ Agent prompt 编辑器（用户不能改 skill）
-- ❌ 团队协作 / 报告分享
+- ❌ 任务取消（当前只支持轮询）
+- ❌ Agent / Team 性能统计
 - ❌ 对象存储 / 邮件通知
 - ❌ 国际化（先中文）
 - ❌ 流式输出（SSE / WebSocket 推送）
